@@ -63,7 +63,3 @@ python -m streamlit run app/app.py            # open http://localhost:8501
 ## Web app
 Enter a property's suburb, type, bedrooms, bathrooms, parking, land size and floor area (optional), sale method, and an optional agent description – or upload a CSV of properties – to get a predicted price with a typical error range (± cross-validated MAPE).
 
-## GenAI acknowledgement
-See the report. *(✏️ Describe here how GenAI was used – e.g. finding sold-listing URLs and drafting rows that were each verified against the listing page, help with code – and how you checked it.)*
-
-*For educational purposes only – not a professional valuation.*
