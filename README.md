@@ -2,141 +2,68 @@
 **SIT307 – Machine Learning Mini Project (8.1D)**
 *Sara Zawad | Deakin University*
 
----
+Predicting sale prices of residential properties in three very different Sydney suburbs – **Parramatta**, **Chatswood** and **Bondi** – from a dataset of **real sold properties** collected from public sold listings on domain.com.au, and deploying the model in a Streamlit app.
 
-## Overview
-
-This project builds a machine learning pipeline to predict residential property prices across three Sydney suburbs: **Parramatta**, **Chatswood**, and **Bondi**.
-
-I generated a synthetic dataset of 120 property sales based on realistic 2022–2024 Sydney market data, explored the data, engineered features, trained three regression models, and deployed a Streamlit web app for real-time predictions.
-
-**Best model: Random Forest — Test R² = 0.647, CV R² = 0.854, MAE ≈ $229k**
+> **Revision:** the earlier version used a synthetic dataset. It has been replaced by real sold-listing data, and all analysis (Parts 1–4) and the app were rerun on it.
 
 ---
 
-## Project Structure
-
+## Project structure
 ```
 sydney-housing-price-prediction/
-│
 ├── data/
-│   └── sydney_housing.csv               # 120 property records (40 per suburb)
-│
-├── plots/                               # All EDA and model plots (PNG)
-│   ├── plot_price_dist.png
-│   ├── plot_price_type.png
-│   ├── plot_correlation.png
-│   ├── plot_floor_price.png
-│   ├── plot_cbd_price.png
-│   ├── plot_feature_importance.png
-│   ├── plot_model_comparison.png
-│   ├── plot_actual_vs_predicted.png
-│   └── plot_worst_errors.png
-│
+│   └── sydney_sold_properties.csv   # the collected dataset (one row per sold property)
+├── housing_features.py              # data cleaning & feature engineering (used by notebook and app)
+├── SIT307_8.1D_notebook.ipynb       # Parts 1–4 (EDA, feature engineering, models, errors)
 ├── app/
-│   └── app.py                           # Streamlit web app (trains model from CSV)
-│
-├── generate_data.py                     # Synthetic data generation script
-├── SIT307_8.1D_notebook.ipynb          # Main Jupyter notebook
-├── SIT307_8.1D_notebook_executed.ipynb # Notebook with all outputs
-└── README.md                            # This file
+│   ├── app.py                       # Streamlit app
+│   └── model.joblib                 # trained model saved by the notebook
+├── plots/                           # figures saved by the notebook
+└── README.md
 ```
 
----
+## Data
+- **Source:** public "Sold" listings on domain.com.au. Every row has the `listing_url` it came from.
+- **Size:** 102 sold properties – Parramatta 36, Chatswood 32, Bondi 34 (sold Aug 2025 – Sep 2026).
+- **Mix:** 71 apartments, 25 houses, 6 townhouses.
+- **Fields:** suburb, address, property type, bedrooms, bathrooms, parking, land size, building size, sold price (target), sold date, sale method, agency, agent description (text), source and URL.
+- **Corrections** made during cleaning are recorded in the `notes` column (e.g. impossible floor areas removed, strata land removed from apartments). Listings with the price withheld were excluded.
 
-## The Three Suburbs
+| Suburb | Median price | Apartments | Houses | Townhouses |
+|---|---|---|---|---|
+| Parramatta | $673,500 | 27 | 5 | 4 |
+| Chatswood | $1,804,000 | 19 | 11 | 2 |
+| Bondi | $1,510,000 | 25 | 9 | 0 |
 
-| Suburb | Distance to CBD | Median Price (dataset) | Property Mix |
+## Method (summary)
+1. **EDA:** price distribution (log-transformed), suburb × property type differences, prices over time, IQR outliers.
+2. **Expected predictors before feature engineering:** suburb, property type, land size – then checked against the EDA.
+3. **Feature engineering:** strata flag, log land size + missing flags, rooms, time trend, auction flag, keyword features from the agent description.
+4. **Models:** Ridge regression, Random Forest, Gradient Boosting – all on log price, tuned and evaluated with **nested 5-fold cross-validation** (MAE, RMSE, MAPE, R²).
+5. **Error analysis:** five largest out-of-fold errors, error by suburb/type and price band.
+
+## Results (nested 5-fold cross-validation)
+| Model | CV MAE | CV MAPE | CV R² |
 |---|---|---|---|
-| Parramatta | ~23 km | $1,149,913 | 53% Apt / 27% House / 20% Townhouse |
-| Chatswood | ~10 km | $2,167,488 | 33% Apt / 42% House / 25% Townhouse |
-| Bondi | ~7 km | $2,082,091 | 72% Apt / 20% House / 8% Townhouse |
+| Ridge regression | $446,603 | 24.6% | 0.35 |
+| Random Forest | $372,588 | 21.8% | 0.76 |
+| **Gradient Boosting** | **$321,364** | **19.8%** | **0.83** |
 
----
+The largest errors are expensive Bondi houses, where the data has only 9 examples and value depends on beach proximity and views.
 
-## Dataset Features
-
-| Feature | Description |
-|---|---|
-| `suburb` | Parramatta / Chatswood / Bondi |
-| `property_type` | Apartment / Townhouse / House |
-| `bedrooms` | Number of bedrooms (1–5) |
-| `bathrooms` | Number of bathrooms |
-| `parking` | Parking spaces (0–3) |
-| `land_size_sqm` | Land area in sqm (0 for apartments) |
-| `floor_area_sqm` | Internal floor area in sqm |
-| `year_built` | Year of construction |
-| `property_age_years` | Age of property in 2024 |
-| `sale_date` | Date of sale |
-| `sale_price` | Sale price in AUD (target variable) |
-| `distance_to_cbd_km` | Approximate distance to Sydney CBD |
-| `school_rating` | Local school rating 1–10 |
-
----
-
-## Models Trained
-
-| Model | Test R² | Test MAE | CV R² (5-fold) |
-|---|---|---|---|
-| Linear Regression | 0.654 | $456,079 | 0.695 ± 0.122 |
-| Decision Tree (depth=6) | 0.543 | $245,262 | 0.837 ± 0.150 |
-| **Random Forest (depth=10)** | **0.647** | **$229,401** | **0.854 ± 0.099** |
-
-**Winner: Random Forest** — lowest MAE, highest CV R², and most stable across folds.
-
----
-
-## Top 3 Most Influential Features
-
-1. **land_size_sqm** (0.424) — bigger land = much higher price, especially for houses
-2. **suburb_enc** (0.266) — which suburb you're in is almost as important as land size
-3. **distance_to_cbd_km** (0.140) — closer to the CBD = higher price
-
----
-
-## Running the Project
-
-### Prerequisites
+## How to run
 ```bash
-pip install pandas numpy scikit-learn matplotlib seaborn streamlit jupyter
+pip install pandas numpy scikit-learn matplotlib seaborn joblib streamlit jupyter
+
+jupyter notebook SIT307_8.1D_notebook.ipynb   # run all cells – saves plots/ and app/model.joblib
+python -m streamlit run app/app.py            # open http://localhost:8501
 ```
 
-### 1. Generate data (already included in repo)
-```bash
-python generate_data.py
-```
 
-### 2. Open the notebook
-```bash
-jupyter notebook SIT307_8.1D_notebook.ipynb
-```
+## Web app
+Enter a property's suburb, type, bedrooms, bathrooms, parking, land size and floor area (optional), sale method, and an optional agent description – or upload a CSV of properties – to get a predicted price with a typical error range (± cross-validated MAPE).
 
-### 4. Launch the web app
-```bash
-python -m streamlit run app/app.py
-```
-The app opens at http://localhost:8501. The app trains the model automatically from the CSV on startup — no separate model file needed.
+## GenAI acknowledgement
+See the report. *(✏️ Describe here how GenAI was used – e.g. finding sold-listing URLs and drafting rows that were each verified against the listing page, help with code – and how you checked it.)*
 
----
-
-## Web App
-
-The Streamlit app lets you enter property details and get an instant price prediction with a confidence range.
-
-**Inputs:** suburb, property type, bedrooms, bathrooms, parking, floor area, land size, year built, distance to CBD, school rating
-
-**Output:** Predicted price + low/high confidence range based on model MAE ($229k)
-
----
-
-## Key Findings
-
-- **Land size dominates:** Feature importance of 0.424 — a bigger block adds hundreds of thousands of AUD
-- **Location matters:** Suburb encoding (0.266) and distance to CBD (0.140) together account for ~40% of predictive power
-- **Bondi is hard to predict:** The biggest error (49.2%) was a premium Bondi house at $5.6M — the model hasn't seen enough top-end examples
-- **Random Forest beats linear models:** Non-linear relationships (e.g. Bondi house premium) can't be captured by a straight line
-
----
-
-*This project was completed as part of SIT307 Machine Learning at Deakin University.*
-*Data is synthetic and for educational purposes only.*
+*For educational purposes only – not a professional valuation.*

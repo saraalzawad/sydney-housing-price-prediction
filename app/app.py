@@ -1,108 +1,120 @@
 """
 SIT307 8.1D – Sydney Housing Price Prediction
-Streamlit Web App
-Trains the Random Forest model from the CSV on first run (no pkl needed).
+Streamlit web app. Loads the model trained in the notebook (app/model.joblib)
+and uses the same feature engineering code (housing_features.py).
+
+Run from the project folder:   python -m streamlit run app/app.py
 """
-
 import os
-import streamlit as st
-import pandas as pd
+import sys
+import joblib
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
+import pandas as pd
+import streamlit as st
 
-# ── Path to data (works from any working directory) ─────────────────────────
-DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'sydney_housing.csv')
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, '..'))
+from housing_features import engineer, SUBURBS, PROPERTY_TYPES, KEYWORDS   # noqa: E402
 
-@st.cache_resource
-def train_model():
-    df = pd.read_csv(DATA_PATH)
+MODEL_PATH = os.path.join(HERE, 'model.joblib')
 
-    # Label encode suburb and property_type
-    le_suburb = LabelEncoder()
-    le_type   = LabelEncoder()
-    df['suburb_enc'] = le_suburb.fit_transform(df['suburb'])
-    df['type_enc']   = le_type.fit_transform(df['property_type'])
-
-    FEATURES = [
-        'suburb_enc', 'type_enc', 'bedrooms', 'bathrooms', 'parking',
-        'land_size_sqm', 'floor_area_sqm', 'property_age_years',
-        'distance_to_cbd_km', 'school_rating'
-    ]
-
-    X = df[FEATURES]
-    y = df['sale_price']
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-
-    rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
-    rf.fit(X_train, y_train)
-
-    preds = rf.predict(X_test)
-    mae = np.mean(np.abs(y_test - preds))
-
-    return rf, le_suburb, le_type, FEATURES, mae
-
-
-# ── UI ───────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title='Sydney Housing Price Predictor', page_icon='🏠', layout='centered')
-
 st.title('🏠 Sydney Housing Price Predictor')
 st.caption('SIT307 8.1D – Sara Zawad | Deakin University')
-st.markdown('Enter property details below to get an instant price estimate.')
 
-with st.spinner('Training model from dataset…'):
-    rf, le_suburb, le_type, FEATURES, mae = train_model()
+if not os.path.exists(MODEL_PATH):
+    st.error('No trained model found. Run the notebook SIT307_8.1D_notebook.ipynb first – '
+             'its last cell saves app/model.joblib.')
+    st.stop()
 
-st.success('Model ready ✓')
-st.divider()
 
-col1, col2 = st.columns(2)
+@st.cache_resource
+def load_bundle():
+    return joblib.load(MODEL_PATH)
 
-with col1:
-    suburb = st.selectbox('Suburb', ['Bondi', 'Chatswood', 'Parramatta'])
-    prop_type = st.selectbox('Property Type', ['Apartment', 'House', 'Townhouse'])
-    bedrooms = st.slider('Bedrooms', 1, 5, 3)
-    bathrooms = st.slider('Bathrooms', 1, 4, 2)
-    parking = st.slider('Parking Spaces', 0, 3, 1)
 
-with col2:
-    floor_area = st.number_input('Floor Area (sqm)', min_value=30, max_value=500, value=100, step=5)
-    land_size = st.number_input(
-        'Land Size (sqm) — 0 for apartments',
-        min_value=0, max_value=2000, value=0 if prop_type == 'Apartment' else 400, step=10
-    )
-    year_built = st.number_input('Year Built', min_value=1950, max_value=2024, value=2005)
-    distance_cbd = st.number_input('Distance to CBD (km)', min_value=1.0, max_value=40.0, value=10.0, step=0.5)
-    school_rating = st.slider('School Rating (1–10)', 1, 10, 7)
+try:
+    bundle = load_bundle()
+except Exception as e:   # e.g. model saved with a different scikit-learn version
+    st.error(f'Could not load app/model.joblib ({e}). Re-run the notebook to retrain and save the model.')
+    st.stop()
+model, feats = bundle['model'], bundle['features']
+st.markdown(
+    f"Estimate the sale price of a property in **Parramatta, Chatswood or Bondi**. "
+    f"Model: **{bundle['model_name']}**, trained on **{bundle['n_properties']} real sold properties** "
+    f"({bundle['sale_date_range'][0]} to {bundle['sale_date_range'][1]})."
+)
 
-st.divider()
+tab_single, tab_upload = st.tabs(['Enter one property', 'Upload a CSV'])
 
-if st.button('Predict Price', type='primary', use_container_width=True):
-    suburb_enc = le_suburb.transform([suburb])[0]
-    type_enc   = le_type.transform([prop_type])[0]
-    age        = 2024 - year_built
 
-    row = pd.DataFrame([[
-        suburb_enc, type_enc, bedrooms, bathrooms, parking,
-        land_size, floor_area, age, distance_cbd, school_rating
-    ]], columns=FEATURES)
+def predict(df_in):
+    data = engineer(df_in)
+    for c in feats['cat'] + feats['num']:
+        if c not in data:
+            data[c] = np.nan
+    return model.predict(data[feats['cat'] + feats['num']])
 
-    price = rf.predict(row)[0]
-    low   = max(0, price - mae)
-    high  = price + mae
 
-    st.markdown('### Estimated Price')
-    st.metric('Predicted Sale Price', f'${price:,.0f}')
-
+with tab_single:
     c1, c2 = st.columns(2)
-    c1.metric('Low Estimate', f'${low:,.0f}')
-    c2.metric('High Estimate', f'${high:,.0f}')
+    with c1:
+        suburb = st.selectbox('Suburb', SUBURBS)
+        ptype = st.selectbox('Property type', PROPERTY_TYPES)
+        beds = st.number_input('Bedrooms', 0, 10, 2)
+        baths = st.number_input('Bathrooms', 1, 10, 1)
+        parking = st.number_input('Parking spaces', 0, 10, 1)
+    with c2:
+        land = None
+        if ptype != 'Apartment':
+            known = st.checkbox('I know the land size', value=(ptype == 'House'))
+            if known:
+                land = st.number_input('Land size (m²)', 20, 5000, 450, step=10)
+        known_b = st.checkbox('I know the internal floor area')
+        building = st.number_input('Floor area (m²)', 20, 1000, 90, step=5) if known_b else None
+        method = st.selectbox('Sale method', ['Auction', 'Private treaty', 'Unknown'])
+        station = None
+        if 'distance_to_station_km' in feats['num']:
+            station = st.number_input('Walking distance to nearest station (km)', 0.0, 10.0, 1.0, step=0.1)
+    desc = st.text_area('Agent description (optional)',
+                        placeholder='e.g. Renovated apartment with ocean views, walk to the station…')
 
-    st.caption(
-        f'Confidence range based on model MAE of ${mae:,.0f}. '
-        'This is a synthetic-data model for educational purposes.'
-    )
+    if st.button('Predict price', type='primary', use_container_width=True):
+        row = pd.DataFrame([{
+            'suburb': suburb, 'property_type': ptype, 'bedrooms': beds, 'bathrooms': baths,
+            'parking': parking, 'land_size_sqm': land if land is not None else np.nan,
+            'building_size_sqm': building if building is not None else np.nan,
+            'sold_date': pd.Timestamp.today().normalize(), 'sale_method': method,
+            'distance_to_station_km': station if station is not None else np.nan,
+            'description': desc,
+        }])
+        price = predict(row)[0]
+        mape = bundle['cv_mape'] / 100
+        st.metric('Predicted sale price', f'${price:,.0f}')
+        a, b = st.columns(2)
+        a.metric('Typical low', f'${price * (1 - mape):,.0f}')
+        b.metric('Typical high', f'${price * (1 + mape):,.0f}')
+        found = [k.replace('kw_', '') for k in KEYWORDS
+                 if engineer(row)[k].iloc[0] == 1]
+        if found:
+            st.caption('Description keywords used: ' + ', '.join(found))
+        st.caption(f"Range = ± the model's cross-validated average error ({bundle['cv_mape']:.1f}%). "
+                   'Treat predictions for unusual or luxury properties with extra caution.')
+
+with tab_upload:
+    st.markdown('Upload a CSV with the same columns as `data/sydney_sold_properties.csv` '
+                '(`sold_price` is optional). Missing optional values can be left blank.')
+    up = st.file_uploader('CSV file', type='csv')
+    if up is not None:
+        from housing_features import clean
+        dfu = pd.read_csv(up, dtype={'property_id': str})
+        if 'sold_price' not in dfu:
+            dfu['sold_price'] = np.nan
+        if 'sold_date' not in dfu:
+            dfu['sold_date'] = pd.Timestamp.today().strftime('%d/%m/%Y')
+        dfu = clean(dfu)
+        dfu['sold_date'] = dfu['sold_date'].fillna(pd.Timestamp.today().normalize())
+        dfu['predicted_price'] = predict(dfu).round(-3)
+        st.dataframe(dfu[[c for c in ['property_id', 'suburb', 'address', 'property_type', 'bedrooms',
+                                      'bathrooms', 'sold_price', 'predicted_price'] if c in dfu]])
+        st.download_button('Download predictions', dfu.to_csv(index=False), 'predictions.csv')
